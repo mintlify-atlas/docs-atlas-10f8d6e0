@@ -1,0 +1,80 @@
+---
+title: "LocationSignalsChecker: MCC, cell, Wi-Fi, and BeaconDB"
+description: "Collects MCC, SIM, cell tower, Wi-Fi, and BeaconDB signals to confirm the device is physically in Russia, strengthening foreign GeoIP detections in VerdictEngine."
+---
+
+`LocationSignalsChecker` gathers evidence about the device's physical location from telephony infrastructure, Wi-Fi access points, and an external cell/Wi-Fi geolocation API. It does **not** produce a `detected = true` result on its own. Its sole role is to provide location context that `VerdictEngine` uses to upgrade a `NEEDS_REVIEW` signal into an unconditional `DETECTED` verdict when a foreign GeoIP signal is also present.
+
+## Purpose and design intent
+
+The checker answers one question: is this device physically in Russia? If the answer is yes and `GeoIpChecker` simultaneously reports a foreign IP, the combination is treated as strong evidence of active VPN or proxy use.
+
+<Note>
+  `LocationSignalsChecker.detected` is **always `false`**. The checker never sets this flag. All of its signals are consumed indirectly through `VerdictEngine`'s unconditional rule logic.
+</Note>
+
+## Data sources
+
+| Source | API / method |
+|--------|-------------|
+| Mobile network operator | `TelephonyManager.networkOperator`, `networkCountryIso`, `networkOperatorName` |
+| SIM card | `TelephonyManager.simOperator`, `simCountryIso`, `isNetworkRoaming` |
+| Cell info (fresh) | `TelephonyManager.requestCellInfoUpdate` (Android 10+, async with 3 s timeout) |
+| Cell info (cached) | `TelephonyManager.allCellInfo` (fallback) |
+| Wi-Fi scan | `WifiManager.startScan` + `SCAN_RESULTS_AVAILABLE_ACTION` (3 s timeout); falls back to `WifiManager.scanResults` |
+| BeaconDB geolocation | `https://api.beacondb.net/v1/geolocate` — accepts up to 6 cell towers and 12 access points |
+| Reverse geocoding | `android.location.Geocoder` — converts BeaconDB coordinates to a country code |
+
+Cell radio types supported: GSM, LTE, WCDMA (NR and other types are silently skipped).
+
+## Permissions required
+
+| Permission | Purpose |
+|-----------|---------|
+| `ACCESS_FINE_LOCATION` | Required to read cell info via `requestCellInfoUpdate` / `allCellInfo` |
+| `NEARBY_WIFI_DEVICES` | Required on Android 13+ to read Wi-Fi scan results |
+
+If the required permission is not granted, the corresponding data source is skipped and an informational finding is recorded. The checker continues with the remaining sources.
+
+## Signal logic
+
+| Signal | Internal key | Result |
+|--------|-------------|--------|
+| `networkMcc == "250"` (Russia) | `network_mcc_ru:true` | Informational finding added |
+| BeaconDB or reverse geocode returns `"RU"` | `cell_country_ru:true` + `location_country_ru:true` | Informational findings added |
+| `networkMcc != "250"` | — | `needsReview = true` |
+| Missing permissions or radio data unavailable | — | Informational only |
+
+When the device is roaming (`TelephonyManager.isNetworkRoaming == true`), a non-Russia MCC is still recorded as `needsReview` but confidence is lowered to `LOW` (versus `MEDIUM` when not roaming).
+
+## Role in VerdictEngine
+
+`VerdictEngine` applies the following unconditional rule **before** evaluating the matrix:
+
+> If any of `network_mcc_ru:true`, `cell_country_ru:true`, or `location_country_ru:true` is present as a finding **and** `GeoIpChecker` simultaneously reports a foreign IP signal, the verdict is unconditionally `DETECTED`.
+
+This rule reflects the Roskomnadzor detection methodology: a device whose cell network identifies as Russian but whose external IP is foreign is very likely routing traffic through a VPN or proxy.
+
+```
+# Pseudocode — unconditional rule 4 in VerdictEngine
+if (locationSignals.hasRussiaConfirmation && geoIp.hasForeignSignal) {
+    verdict = DETECTED
+}
+```
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="GeoIpChecker" href="/modules/geo-ip">
+    Foreign IP detection that LocationSignalsChecker amplifies.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    Unconditional rules and the matrix that combine all checker outputs.
+  </Card>
+  <Card title="Permissions" href="/reference/permissions">
+    Full list of permissions used across all checkers.
+  </Card>
+  <Card title="Architecture overview" href="/architecture/overview">
+    How all six checkers run in parallel and feed VerdictEngine.
+  </Card>
+</CardGroup>

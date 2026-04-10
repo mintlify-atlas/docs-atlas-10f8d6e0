@@ -1,0 +1,65 @@
+---
+title: "GeoIpChecker: detect foreign IP, hosting, and proxy flags"
+description: "Queries ipapi.is and iplocate.io to detect whether the device's external IP is foreign, hosted in a datacenter, or flagged as a VPN or proxy."
+---
+
+`GeoIpChecker` fetches the device's external IP from two independent HTTPS GeoIP providers and combines their answers to produce a single `detected` or `needsReview` signal. It runs in parallel with all other checkers and is the primary source of the foreign-IP signal consumed by `VerdictEngine`.
+
+## Data sources
+
+The checker contacts both providers concurrently. Each fetch is retried up to three times with a 250 ms delay between attempts. If neither provider returns a valid response, the checker emits `needsReview = true` rather than a hard error.
+
+| Provider | URL | Role |
+|----------|-----|------|
+| `ipapi.is` | `https://api.ipapi.is/` | Primary — provides `country_code`, `is_proxy`, `is_vpn`, `is_tor`, `is_datacenter`, ISP, ASN |
+| `iplocate.io` | `https://www.iplocate.io/api/lookup` | Fallback / additional hosting vote — provides `country_code`, `privacy.is_proxy`, `privacy.is_vpn`, `privacy.is_tor`, `privacy.is_hosting` |
+
+Connect and read timeout: **10 seconds** per provider.
+
+## Signal logic
+
+Responses are merged before evaluation. The merge step identifies a *base provider* (preferring `ipapi.is`) and then checks whether the other provider returned the same IP address. Only IP-compatible providers vote on the hosting and proxy flags.
+
+| Signal | Logic | Result |
+|--------|-------|--------|
+| `countryCode != "RU"` | IP address treated as foreign | `needsReview = true` if neither hosting nor proxy is set |
+| Hosting flag | Majority vote across compatible providers (`votes > checks / 2`) | `detected = true` |
+| Proxy / VPN / Tor flag | Any compatible provider reports `is_proxy`, `is_vpn`, or `is_tor` | `detected = true` |
+| Country, ISP, org, ASN | Taken from `ipapi.is`; filled from `iplocate.io` only when IPs agree | Informational — no direct effect on verdict |
+
+## Final result formula
+
+```
+detected    = isHosting || isProxy
+needsReview = foreignIp && !isHosting && !isProxy
+```
+
+A foreign IP that is **also** flagged as hosting or proxy goes straight to `detected = true` and does not set `needsReview`.
+
+## Impact on VerdictEngine
+
+`GeoIpChecker` feeds two distinct inputs into the verdict matrix:
+
+- **`geoMatrixHit`** — set when `geoIp.needsReview == true` or when a `GEO_IP` evidence item is present. This represents the foreign IP signal.
+- **Unconditional DETECTED rule** — if `LocationSignalsChecker` confirms the device is in Russia (`network_mcc_ru:true`, `cell_country_ru:true`, or `location_country_ru:true`) while `GeoIpChecker` simultaneously reports a foreign signal, `VerdictEngine` emits `DETECTED` regardless of other matrix values.
+
+<Tip>
+  If you see `needsReview` from `GeoIpChecker` but not `detected`, the device's IP is outside Russia but is not recognised as a hosting provider or proxy by either source. Cross-check with `IpComparisonChecker` to understand routing behaviour.
+</Tip>
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="LocationSignalsChecker" href="/modules/location-signals">
+    Confirms physical location in Russia to amplify foreign GeoIP signals.
+  </Card>
+  <Card title="IpComparisonChecker" href="/modules/ip-comparison">
+    Diagnostic module comparing RU and non-RU public IP checkers.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    How GeoIP signals combine with direct and indirect evidence.
+  </Card>
+  <Card title="Evidence sources" href="/reference/evidence-sources">
+    Full list of `EvidenceSource` values and their meanings.
+  </Card>
+</CardGroup>

@@ -1,80 +1,111 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Get started: install, run, and read your first check"
+description: "Install RKNHardering on an Android device, grant the required permissions, run your first check, and interpret the results."
 ---
 
-## Get started in three steps
+RKNHardering runs entirely on-device. There is no account, no server to configure, and no Play Store listing — you build the APK from source or sideload a pre-built one. This guide walks you through everything from installation to reading your first verdict.
 
-Get your documentation site running locally and make your first customization.
+## Requirements
 
-### Step 1: Set up your local environment
+Before you start, confirm your device and environment meet the following requirements:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- **Android 8.0 (API 26)** or later
+- The following permissions (the app requests them at runtime):
 
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+| Permission | Why it is needed |
+|---|---|
+| `INTERNET` | GeoIP lookups, BeaconDB geolocation, IP comparison requests |
+| `ACCESS_NETWORK_STATE` | Read active network capabilities and link properties |
+| `ACCESS_WIFI_STATE` | Read current Wi-Fi BSSID and scan results |
+| `ACCESS_FINE_LOCATION` | Cell tower lookup via `requestCellInfoUpdate` |
+| `NEARBY_WIFI_DEVICES` | Wi-Fi scan results on Android 13+ |
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+`ACCESS_FINE_LOCATION` and `NEARBY_WIFI_DEVICES` are used only by the Location Signals module to confirm physical location in Russia. You can skip granting them, but the module will report that data is unavailable.
 </Note>
+
+## Installation
+
+<Steps>
+  <Step title="Build or obtain the APK">
+    RKNHardering is not distributed through the Play Store. You have two options:
+
+    - **Build from source** — follow the [build guide](/build) to compile a debug APK with Gradle. This takes about five minutes if you already have the Android SDK installed.
+    - **Sideload a pre-built APK** — if you have a trusted pre-built APK, transfer it to your device and install it.
+
+    <Tip>
+    Building from source is the recommended option. It lets you inspect the code and guarantees you are running an unmodified version of the app.
+    </Tip>
+  </Step>
+
+  <Step title="Enable installation from unknown sources">
+    Android blocks APKs that were not installed through the Play Store by default. To allow installation:
+
+    1. Open **Settings** on your device.
+    2. Navigate to **Apps** → **Special app access** → **Install unknown apps**.
+    3. Select the app you will use to open the APK (for example, a file manager or your browser) and toggle **Allow from this source**.
+  </Step>
+
+  <Step title="Install the APK">
+    Locate the APK file on your device using a file manager and tap it to begin installation. Follow the system prompts to complete the install.
+  </Step>
+</Steps>
+
+## First run
+
+<Steps>
+  <Step title="Open RKNHardering">
+    Tap the RKNHardering icon in your app drawer to launch the app.
+  </Step>
+
+  <Step title="Grant permissions when prompted">
+    On first launch, the app requests location permission (`ACCESS_FINE_LOCATION`) and, on Android 13+, nearby Wi-Fi devices permission (`NEARBY_WIFI_DEVICES`). Grant both for the most complete results.
+
+    <Tip>
+    If you deny a permission and later want to grant it, go to **Settings** in the app and tap the **Permissions** card to re-request them.
+    </Tip>
+  </Step>
+
+  <Step title="Tap Run Check">
+    Tap the **Run Check** button on the main screen. The six detection modules start running in parallel immediately.
+  </Step>
+
+  <Step title="Watch results appear">
+    As each module finishes, its result card appears on screen:
+
+    - **GeoIP** — public IP, country, ISP, and hosting/proxy flags
+    - **IP comparison** — whether RU and non-RU checkers agree on your IP (diagnostic)
+    - **Direct signs** — VPN transport, system proxy, installed apps
+    - **Indirect signs** — interfaces, routes, DNS, localhost listeners, `dumpsys`
+    - **Location signals** — MCC, SIM, cell towers, Wi-Fi, BeaconDB
+    - **Bypass checker** — proxy port scan progress, Xray API, underlying network
+
+    <Note>
+    The Bypass Checker runs a full port scan from 1024 to 65535 with 200 parallel connections by default. It is the slowest module. You can narrow the scan range or switch to popular ports only in Settings.
+    </Note>
+  </Step>
+
+  <Step title="Read the final verdict">
+    When all modules complete, a verdict card appears at the top of the screen showing one of three states:
+
+    - **NOT_DETECTED** — no reliable signals of a VPN or proxy were found
+    - **NEEDS_REVIEW** — weak or ambiguous signals require manual investigation
+    - **DETECTED** — strong, corroborating evidence confirms a VPN or bypass tool is active
+
+    Tap any module card to expand its findings and see the individual signals that contributed to the result.
+  </Step>
+</Steps>
+
+## Settings overview
+
+Open **Settings** (gear icon) to adjust how checks run:
+
+| Setting | What it controls |
+|---|---|
+| **Split tunnel scan** | Enables or disables the Bypass Checker module entirely. Disable to skip the port scan. |
+| **Port range** | Controls which ports the proxy scanner covers: Popular, Extended (up to 15000), Full (1024–65535), or a custom range. |
+| **Network requests** | Disabling this skips GeoIP lookups and BeaconDB geolocation. Useful for purely local checks. |
+| **Privacy mode** | Redacts IP addresses and other identifiable values from the results UI. |
+| **DNS resolver** | Choose between System DNS, direct DNS (specify servers), or DNS-over-HTTPS. Presets for Cloudflare, Google, and Yandex are included. |
+
+See [Check settings reference](/architecture/check-settings) for a full description of every option and its effect on each module.

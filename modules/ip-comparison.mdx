@@ -1,0 +1,87 @@
+---
+title: "IpComparisonChecker: Russian vs international IP routing"
+description: "Compares public IP addresses reported by Russian and international IP checker services to detect routing asymmetry — displayed in the UI as a diagnostic block only."
+---
+
+`IpComparisonChecker` queries nine public IP checker services split into two groups — Russian-hosted and internationally-hosted — and compares what each group sees as the device's external IP. Routing asymmetry between groups is a strong indicator of selective traffic interception or per-destination VPN routing.
+
+<Note>
+  `IpComparisonChecker.detected` does **not** feed into `VerdictEngine`. This module is displayed in the UI as a visual diagnostic tool to help you understand routing behaviour. Even when it reports `detected = true`, the final verdict is unaffected.
+</Note>
+
+## Service groups
+
+| Group | Services | URL |
+|-------|----------|-----|
+| `RU` | Yandex IPv4 | `https://ipv4-internet.yandex.net/api/v0/ip` |
+| `RU` | 2ip.ru | `https://2ip.ru` |
+| `RU` | Yandex IPv6 | `https://ipv6-internet.yandex.net/api/v0/ip` |
+| `NON_RU` | ifconfig.me IPv4 | `https://ipv4.ifconfig.me/ip` |
+| `NON_RU` | ifconfig.me IPv6 | `https://ipv6.ifconfig.me/ip` |
+| `NON_RU` | checkip.amazonaws.com | `https://checkip.amazonaws.com` |
+| `NON_RU` | ipify | `https://api.ipify.org` |
+| `NON_RU` | ip.sb IPv4 | `https://api-ipv4.ip.sb/ip` |
+| `NON_RU` | ip.sb IPv6 | `https://api-ipv6.ip.sb/ip` |
+
+All nine requests run concurrently. Each request is retried up to three times with a 250 ms delay. The default per-request timeout is 7 seconds.
+
+## Group evaluation logic
+
+Each group is evaluated independently before the cross-group comparison. A group builds a `canonicalIp` only when all responding services within the group agree on the same address.
+
+| Condition within a group | Group state |
+|--------------------------|-------------|
+| No services responded | `needsReview = true`, no canonical IP |
+| All responding services return the same IP | `canonicalIp` set, normal |
+| Responding services return different IPs | `detected = true` within the group (internal routing split) |
+| Mix of IPv4 and IPv6 addresses returned | `needsReview = true` (family conflict) |
+| Only IPv6 endpoints failed (IPv6 unreachable) | Errors ignored — IPv4 consensus still valid |
+
+IPv6 endpoint errors are silently ignored when the endpoint URL contains `ipv6`, the error message references an IPv6 address literal, or the error is `address family not supported` / `network is unreachable` for a host that has AAAA records. This prevents IPv6 unavailability from masking a valid IPv4 consensus.
+
+## Cross-group comparison
+
+The overall `detected` flag is set only when all of the following are true:
+
+1. The `RU` group reached full internal consensus (`canonicalIp` set, no `needsReview`, no `detected`).
+2. The `NON_RU` group reached full internal consensus under the same conditions.
+3. Both canonical IPs are in the same address family (IPv4 or IPv6).
+4. The two canonical IPs are different.
+
+```
+detected    = fullConsensusAvailable && !familyMismatch && ruCanonical != nonRuCanonical
+needsReview = !detected && (anyGroupDetected || anyGroupNeedsReview || familyMismatch || rawMismatch)
+```
+
+A `rawMismatch` (canonical IPs differ but full consensus was not achieved in both groups) contributes to `needsReview` rather than `detected`.
+
+## Interpreting results
+
+| Summary state | Meaning |
+|---------------|---------|
+| All same (e.g. `1.2.3.4`) | RU and non-RU services agree — no routing asymmetry detected |
+| RU and non-RU differ | Strong indicator of selective routing (VPN, split-tunnel, or BGP asymmetry) |
+| Family mismatch | One group returned IPv4, the other IPv6 — likely a network configuration issue, not a VPN |
+| Incomplete / needs review | At least one group had internal disagreement or no responses |
+| IPv4 only (IPv6 ignored) | IPv6 is unavailable on this network; result is based on IPv4 checkers only |
+
+## Limitations
+
+Because this module does not participate in `VerdictEngine`, you should treat its output as supporting evidence rather than a definitive signal. Use it together with `GeoIpChecker` and `BypassChecker` results to build a complete picture.
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="GeoIpChecker" href="/modules/geo-ip">
+    Primary source of foreign-IP signals that do feed into VerdictEngine.
+  </Card>
+  <Card title="BypassChecker" href="/modules/bypass-checker">
+    Active probing that confirms whether a detected proxy is routing traffic.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    The matrix that combines checker outputs into a final verdict.
+  </Card>
+  <Card title="Architecture overview" href="/architecture/overview">
+    How IpComparisonChecker fits into the overall six-checker pipeline.
+  </Card>
+</CardGroup>

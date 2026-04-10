@@ -1,0 +1,136 @@
+---
+title: "VpnAppCatalog: package signatures and proxy port list"
+description: "Complete reference for the 24-entry VpnAppCatalog: package names, signal types, app families, bypass kinds, and default ports used by the proxy scanner."
+---
+
+`VpnAppCatalog` is a compile-time object that ships with the app and contains signatures for known VPN and proxy applications. Every detection module that needs to identify circumvention tools by package name or scan localhost ports consults this catalog.
+
+It serves two purposes:
+
+1. **Package detection** — `DirectSignsChecker` and `IndirectSignsChecker` compare installed and running packages against `knownPackageNames` and `findByPackageName`.
+2. **Port list for the proxy scanner** — `BypassChecker` seeds its `ProxyScanner` with `localhostProxyPorts`, a deduplicated, sorted list of every `defaultPorts` value across all entries.
+
+## Signal types: VpnClientSignal
+
+Each catalog entry declares one or more `VpnClientSignal` values that describe how the app exposes itself on the device.
+
+<CardGroup cols={3}>
+  <Card title="VPN_SERVICE" icon="shield">
+    The app registers as an Android `VpnService` and uses a TUN interface to capture device traffic. Detected via `NetworkCapabilities.TRANSPORT_VPN`, `dumpsys`, and network interface scans.
+  </Card>
+  <Card title="LOCAL_PROXY" icon="plug">
+    The app runs a local SOCKS5 or HTTP proxy on a well-known localhost port. Traffic bypasses the TUN interface and routes through `127.0.0.1` or `::1`. Detected by `ProxyScanner`.
+  </Card>
+  <Card title="XRAY_API" icon="satellite-dish">
+    The app exposes the Xray gRPC management API on a localhost port. Detected by `XrayApiScanner` via a real `HandlerServiceGrpc.listOutbounds` gRPC call. Its presence triggers an immediate `DETECTED` verdict.
+  </Card>
+</CardGroup>
+
+## App classification: VpnAppKind
+
+Every entry is tagged with one of two classification values.
+
+| Value | Meaning |
+|-------|---------|
+| `TARGETED_BYPASS` | Designed specifically for circumventing Russian internet restrictions. Includes Xray/V2Ray clients, sing-box derivatives, Hiddify, ByeDPI variants, Termux proxy setups, and similar tools. |
+| `GENERIC_VPN` | General-purpose VPN or privacy tool not primarily targeting Russian censorship. Includes WireGuard, Shadowsocks, Outline, Psiphon, Tor/Orbot, and AmneziaVPN. |
+
+<Note>
+  `VpnAppKind` is attached to each `EvidenceItem` and `MatchedVpnApp` emitted by detection modules. The UI uses it to visually distinguish targeted bypass tools from generic VPN software, but `VerdictEngine` does not weight the two kinds differently in its matrix.
+</Note>
+
+## App table
+
+The full catalog contains 24 entries. The **Default ports** column lists the ports that feed into `localhostProxyPorts` and are scanned first in `AUTO` mode. A dash means the app has no default proxy ports — it either uses the TUN interface exclusively or operates on non-standard, user-configured ports.
+
+| App name | Package | Family | Kind | Default ports | Signals |
+|----------|---------|--------|------|--------------|---------|
+| v2rayNG | `com.v2ray.ang` | Xray/V2Ray | `TARGETED_BYPASS` | 1080, 10808, 10809 | `VPN_SERVICE`, `LOCAL_PROXY`, `XRAY_API` |
+| Xray | `io.github.saeeddev94.xray` | Xray/V2Ray | `TARGETED_BYPASS` | 1080, 10808, 10809 | `VPN_SERVICE`, `LOCAL_PROXY`, `XRAY_API` |
+| sing-box | `io.nekohasekai.sfa` | sing-box | `TARGETED_BYPASS` | 1080, 2080, 2081 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| NekoBox | `moe.nb4a` | NekoBox | `TARGETED_BYPASS` | 1080, 2080, 2081 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| HAPP VPN | `com.happproxy` | HAPP | `TARGETED_BYPASS` | 1080, 8080 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| Hiddify | `app.hiddify.com` | Hiddify | `TARGETED_BYPASS` | 1080, 12334 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| ClashMeta for Android | `com.github.metacubex.clash.meta` | Clash | `GENERIC_VPN` | 7890, 7891 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| Shadowsocks | `com.github.shadowsocks` | Shadowsocks | `GENERIC_VPN` | 1080 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| Shadowsocks TV | `com.github.shadowsocks.tv` | Shadowsocks | `GENERIC_VPN` | 1080 | `VPN_SERVICE`, `LOCAL_PROXY` |
+| ByeDPI | `io.github.dovecoteescapee.byedpi` | DPI bypass | `TARGETED_BYPASS` | — | `VPN_SERVICE` |
+| ByeByeDPI | `com.romanvht.byebyedpi` | DPI bypass | `TARGETED_BYPASS` | — | `VPN_SERVICE` |
+| Outline | `org.outline.android.client` | Outline | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Psiphon | `com.psiphon3` | Psiphon | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Lantern | `org.getlantern.lantern` | Lantern | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| WireGuard | `com.wireguard.android` | WireGuard | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| strongSwan | `com.strongswan.android` | IPSec/L2TP | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Tor Browser | `org.torproject.android` | Tor/Orbot | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Orbot | `info.guardianproject.orfox` | Tor/Orbot | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Tor Browser (official) | `org.torproject.torbrowser` | Tor/Orbot | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| AmneziaVPN | `org.amnezia.vpn` | AmneziaVPN | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| AmneziaWG | `org.amnezia.awg` | AmneziaVPN | `GENERIC_VPN` | — | `VPN_SERVICE` |
+| Termux | `com.termux` | Termux | `TARGETED_BYPASS` | 1080, 1443 | `LOCAL_PROXY` |
+| tg-ws-proxy | `org.aspect.tgwsproxy` | tg-ws-proxy | `TARGETED_BYPASS` | 1080, 1443 | `LOCAL_PROXY` |
+| tg-ws-proxy (Android) | `org.aspect.tgwsproxy.android` | tg-ws-proxy | `TARGETED_BYPASS` | 1080, 1443 | `LOCAL_PROXY` |
+
+<Tip>
+  Termux and the tg-ws-proxy entries carry only `LOCAL_PROXY` — they have no `VPN_SERVICE` signal. This means they are invisible to `NetworkCapabilities` and `dumpsys` checks but will appear in the `ProxyScanner` results and in `checkProxyTechnicalSignals`.
+</Tip>
+
+## API surface
+
+The following properties and functions are used internally by detection modules. The catalog is a compile-time `object`; there is no runtime loading or network fetch.
+
+### `VpnAppCatalog.signatures`
+
+```kotlin
+val signatures: List<VpnAppSignature>
+```
+
+The complete ordered list of `VpnAppSignature` entries. Iterated by `InstalledVpnAppDetector` and `checkProxyTechnicalSignals`.
+
+### `VpnAppCatalog.knownPackageNames`
+
+```kotlin
+val knownPackageNames: Set<String>
+```
+
+A `LinkedHashSet` of every package name in the catalog, preserving insertion order. Used for fast membership tests when querying `PackageManager`.
+
+### `VpnAppCatalog.localhostProxyPorts`
+
+```kotlin
+val localhostProxyPorts: List<Int>
+```
+
+A sorted, deduplicated list of all `defaultPorts` values across all entries. `ProxyScanner` uses this as its "popular ports" list in `AUTO` mode before falling back to the full `1024..65535` range. Additional ports `1081`, `7890`, and `7891` are appended by `ProxyScanner` itself.
+
+### `VpnAppCatalog.findByPackageName`
+
+```kotlin
+fun findByPackageName(packageName: String): VpnAppSignature?
+```
+
+Returns the first `VpnAppSignature` whose `packageName` matches the argument, or `null` if the package is not in the catalog. Called when `dumpsys` output names a specific package so the engine can attach family, kind, and confidence data to the resulting `EvidenceItem`.
+
+### `VpnAppCatalog.familiesForPort`
+
+```kotlin
+fun familiesForPort(port: Int): Set<String>
+```
+
+Returns the set of family names for all catalog entries that list the given port in their `defaultPorts`. Used to annotate `ProxyScanner` findings with the app families that typically use a detected port.
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Evidence sources" icon="list-check" href="/reference/evidence-sources">
+    How catalog matches become EvidenceItem entries and which sources feed VerdictEngine.
+  </Card>
+  <Card title="Direct signs module" icon="circle-dot" href="/modules/direct-signs">
+    InstalledVpnAppDetector and NetworkCapabilities checks that consume the catalog.
+  </Card>
+  <Card title="Bypass checker" icon="magnifying-glass" href="/modules/bypass-checker">
+    ProxyScanner and XrayApiScanner that use localhostProxyPorts and XRAY_API signals.
+  </Card>
+  <Card title="Indirect signs module" icon="radar" href="/modules/indirect-signs">
+    checkProxyTechnicalSignals uses LOCAL_PROXY-only entries from the catalog.
+  </Card>
+</CardGroup>

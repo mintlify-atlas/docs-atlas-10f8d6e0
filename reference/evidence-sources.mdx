@@ -1,0 +1,258 @@
+---
+title: "EvidenceSource enum: all detection signal types explained"
+description: "Every EvidenceSource enum value, its confidence tier, and which values feed into VerdictEngine's geo, direct, indirect, and unconditional verdict paths."
+---
+
+Every signal that a detection module collects is wrapped in an `EvidenceItem`. The `source` field on that item identifies where the signal came from. `VerdictEngine` reads the `source` field to decide which matrix bucket a piece of evidence belongs to — or whether it short-circuits the matrix entirely.
+
+## EvidenceConfidence
+
+Before looking at individual sources, understand the confidence scale attached to each `EvidenceItem`.
+
+| Value | Meaning |
+|-------|---------|
+| `LOW` | Signal is present but weak or easily explained by non-VPN causes. |
+| `MEDIUM` | Signal is notable and worth surfacing, but not conclusive on its own. |
+| `HIGH` | Signal is strong and highly specific to VPN or proxy activity. |
+
+Confidence is set per-item by the module that creates it. `VerdictEngine` does not directly threshold on confidence — it reads `detected: Boolean` and `source` — but the UI uses confidence to style individual findings.
+
+## Complete EvidenceSource reference
+
+### GEO_IP
+
+**Verdict matrix role:** geo hit
+
+Emitted by `GeoIpChecker`. Set to `detected = true` when the external IP is identified as belonging to a hosting provider or proxy/VPN/Tor exit node by `ipapi.is` or `iplocate.io`. A foreign IP that does not trigger the hosting or proxy flag contributes a `needsReview` on the `CategoryResult` instead of a positive `EvidenceItem`, but `VerdictEngine` treats `geoIp.needsReview` as a geo hit too.
+
+---
+
+### DIRECT_NETWORK_CAPABILITIES
+
+**Verdict matrix role:** direct hit
+
+Emitted by `DirectSignsChecker.checkVpnTransport`. Fires when `ConnectivityManager.getNetworkCapabilities(activeNetwork)` returns capabilities that contain `TRANSPORT_VPN`, `IS_VPN`, or `VpnTransportInfo`. This is the most direct OS-level confirmation that a VPN transport is active.
+
+---
+
+### INDIRECT_NETWORK_CAPABILITIES
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker.checkNotVpnCapability`. Fires when the string representation of `NetworkCapabilities` does **not** contain `NOT_VPN`. The absence of this capability on a non-loopback network is a reliable indirect indicator that the active network is a VPN.
+
+---
+
+### SYSTEM_PROXY
+
+**Verdict matrix role:** direct hit
+
+Emitted by `DirectSignsChecker.checkSystemProxy`. Fires when `System.getProperty("http.proxyHost")` or `System.getProperty("socksProxyHost")` is set and a valid port is present. A valid host-and-port combination sets `detected = true`; a host with a missing or malformed port sets `needsReview`.
+
+---
+
+### INSTALLED_APP
+
+**Verdict matrix role:** none (diagnostic only)
+
+Emitted by `InstalledVpnAppDetector` when a package from `VpnAppCatalog.knownPackageNames` is found installed on the device. This is evidence of installation, not of an active tunnel. It contributes to `DirectSignsChecker.needsReview` and is shown in the UI, but it never causes a `DETECTED` verdict on its own and is not read by `VerdictEngine`.
+
+---
+
+### VPN_SERVICE_DECLARATION
+
+**Verdict matrix role:** none (diagnostic only)
+
+Emitted by `InstalledVpnAppDetector` when `PackageManager.queryIntentServices` finds an app that declares `VpnService.SERVICE_INTERFACE`. Like `INSTALLED_APP`, this is a declaration signal — the service may not be running. It is shown as a diagnostic finding in the UI and does not participate in the verdict matrix.
+
+<Note>
+  Both `INSTALLED_APP` and `VPN_SERVICE_DECLARATION` move `DirectSignsChecker` into `needsReview` state, which feeds into the UI summary. They do not create `directMatrixHit` or `indirectMatrixHit` in `VerdictEngine`.
+</Note>
+
+---
+
+### ACTIVE_VPN
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker` when `dumpsys vpn_management` (Android 12+) or `dumpsys activity services android.net.VpnService` finds active VPN service entries. Unlike `INSTALLED_APP`, this confirms a running service. Evidence items with this source set `detected = true` and count toward `indirectMatrixHit`.
+
+---
+
+### LOCAL_PROXY
+
+**Verdict matrix role:** none (contributes via PROXY_TECHNICAL_SIGNAL)
+
+Emitted by `ProxyScanner` when a SOCKS5 or HTTP CONNECT proxy is confirmed listening on a localhost port. An open proxy alone sets `needsReview`, not `detected` — bypass is only confirmed if both a direct IP and a proxy-routed IP can be obtained and they differ. `ProxyScanner` findings also feed `checkProxyTechnicalSignals`, which emits `PROXY_TECHNICAL_SIGNAL` evidence that does count in the indirect matrix.
+
+---
+
+### XRAY_API
+
+**Verdict matrix role:** unconditional DETECTED
+
+Emitted by `XrayApiScanner` when a real `HandlerServiceGrpc.listOutbounds` gRPC call succeeds on any localhost port. Because the Xray gRPC API is only reachable if an Xray-family client is actively running, its presence is treated as definitive confirmation. `VerdictEngine` returns `DETECTED` immediately without evaluating the matrix.
+
+---
+
+### SPLIT_TUNNEL_BYPASS
+
+**Verdict matrix role:** unconditional DETECTED
+
+Emitted by `BypassChecker` when confirmed split tunnel bypass is detected — specifically, when both a direct IP and a proxy-routed IP are obtained and they differ, confirming that traffic is being routed differently through the VPN. `VerdictEngine` returns `DETECTED` immediately when this evidence is present.
+
+---
+
+### NETWORK_INTERFACE
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker.checkNetworkInterfaces`. Fires when `NetworkInterface.getNetworkInterfaces()` includes an active interface matching `tun\d+`, `tap\d+`, `wg\d+`, `ppp\d+`, or `ipsec.*`. These interface name patterns are characteristic of VPN tunnels and are not present on normal Wi-Fi or mobile data connections.
+
+---
+
+### ROUTING
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker.checkRoutingTable`. Fires when `LinkProperties.routes` (or the `/proc/net/route` fallback) reveals a non-standard default route, dedicated routes through VPN-like interfaces, or a split tunneling pattern where tunnel routes coexist with a normal default route through a standard interface.
+
+---
+
+### DNS
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker.checkDns`. Fires when `ConnectivityManager.getLinkProperties(activeNetwork).dnsServers` reveals loopback DNS servers (`127.x.x.x` or `::1`), or private DNS that differs from the underlying non-VPN network while a VPN is active.
+
+---
+
+### PROXY_TECHNICAL_SIGNAL
+
+**Verdict matrix role:** indirect hit
+
+Emitted by `IndirectSignsChecker.checkProxyTechnicalSignals`. Fires when a localhost listener is confirmed on a known proxy port (from `VpnAppCatalog.localhostProxyPorts` or the set of well-known ports checked by `DirectSignsChecker`). A proxy-only utility from the catalog without `VPN_SERVICE`, or a large count of high-port localhost listeners, contributes `needsReview` rather than `detected`.
+
+---
+
+### DUMPSYS
+
+**Verdict matrix role:** indirect hit (via ACTIVE_VPN)
+
+`DUMPSYS` identifies the raw data source for findings produced by `checkDumpsysVpn` and `checkDumpsysVpnService`. Active VPN entries found through `dumpsys` are wrapped as `ACTIVE_VPN` evidence items, so `DUMPSYS` itself does not appear as a standalone source in the matrix — its contribution flows through `ACTIVE_VPN`.
+
+---
+
+### LOCATION_SIGNALS
+
+**Verdict matrix role:** unconditional context (not a matrix column)
+
+Emitted by `LocationSignalsChecker`. Carries MCC, SIM, cell tower, Wi-Fi BSSID, and BeaconDB geolocation signals. `LocationSignalsChecker.detected` is always `false` in the current implementation. Its role in `VerdictEngine` is to confirm physical location: if location signals report `network_mcc_ru:true`, `cell_country_ru:true`, or `location_country_ru:true` while `GeoIP` simultaneously reports a foreign IP, `VerdictEngine` returns `DETECTED` immediately — before the matrix is evaluated.
+
+---
+
+### VPN_GATEWAY_LEAK
+
+**Verdict matrix role:** unconditional DETECTED
+
+Emitted by `UnderlyingNetworkProber` when a non-VPN internet-capable network remains reachable while a VPN is active and the underlying IP is accessible via direct socket binding. This confirms that the VPN gateway is leaking the underlying connection. `VerdictEngine` returns `DETECTED` immediately.
+
+---
+
+### VPN_NETWORK_BINDING
+
+**Verdict matrix role:** unconditional DETECTED
+
+Emitted by `UnderlyingNetworkProber` when VPN network binding is confirmed. `VerdictEngine` returns `DETECTED` immediately.
+
+---
+
+### TUN_ACTIVE_PROBE
+
+**Verdict matrix role:** context / informational
+
+Emitted by active TUN interface probe results. Used as supporting context in findings but does not map to a named matrix column in `VerdictEngine`.
+
+---
+
+## Verdict matrix summary
+
+`VerdictEngine` evaluates evidence in two phases. Unconditional rules fire first; the matrix runs only if none of them match.
+
+### Phase 1: unconditional rules
+
+Any of these sources present with `detected = true` immediately returns `DETECTED` without consulting the matrix:
+
+| Source | Trigger condition |
+|--------|-------------------|
+| `SPLIT_TUNNEL_BYPASS` | Confirmed traffic routed differently through proxy vs direct |
+| `XRAY_API` | Xray gRPC API responded on any localhost port |
+| `VPN_GATEWAY_LEAK` | Underlying network reachable while VPN is active |
+| `VPN_NETWORK_BINDING` | VPN network binding confirmed |
+| `LOCATION_SIGNALS` + `GEO_IP` | Location confirms Russia while GeoIP reports foreign IP |
+
+### Phase 2: three-axis matrix
+
+If no unconditional rule fires, `VerdictEngine` computes three boolean hits:
+
+| Matrix axis | Contributing sources |
+|-------------|---------------------|
+| **Geo hit** | `GEO_IP` (detected) or `geoIp.needsReview` |
+| **Direct hit** | `DIRECT_NETWORK_CAPABILITIES`, `SYSTEM_PROXY` |
+| **Indirect hit** | `INDIRECT_NETWORK_CAPABILITIES`, `ACTIVE_VPN`, `NETWORK_INTERFACE`, `ROUTING`, `DNS`, `PROXY_TECHNICAL_SIGNAL` |
+
+The hits combine to produce the final verdict:
+
+| Geo | Direct | Indirect | Verdict |
+|-----|--------|----------|---------|
+| No | No | No | `NOT_DETECTED` |
+| No | Yes | No | `NOT_DETECTED` |
+| No | No | Yes | `NOT_DETECTED` |
+| Yes | No | No | `NEEDS_REVIEW` |
+| No | Yes | Yes | `NEEDS_REVIEW` |
+| Any other combination | | | `DETECTED` |
+
+<Warning>
+  `INSTALLED_APP` and `VPN_SERVICE_DECLARATION` are **not** in either the direct or indirect source sets. They will never produce a matrix hit and will never directly cause a `DETECTED` verdict, regardless of how many VPN apps are installed.
+</Warning>
+
+## EvidenceItem data class
+
+```kotlin
+data class EvidenceItem(
+    val source: EvidenceSource,
+    val detected: Boolean,
+    val confidence: EvidenceConfidence,
+    val description: String,
+    val family: String? = null,
+    val packageName: String? = null,
+    val kind: VpnAppKind? = null,
+)
+```
+
+| Field | Description |
+|-------|-------------|
+| `source` | Which detection mechanism produced this item. |
+| `detected` | `true` if the signal confirms VPN/proxy activity; `false` if it was checked and found absent. |
+| `confidence` | `LOW`, `MEDIUM`, or `HIGH` — how strongly this item supports a VPN conclusion. |
+| `description` | Human-readable explanation of what was found, shown in the UI findings list. |
+| `family` | VPN app family name (e.g., `"Xray/V2Ray"`) if this item is tied to a specific app family. `null` otherwise. |
+| `packageName` | App package name if this item was produced by package-level detection. `null` otherwise. |
+| `kind` | `TARGETED_BYPASS` or `GENERIC_VPN` if the app kind is known. `null` for non-app evidence. |
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="VerdictEngine" icon="scale-balanced" href="/architecture/verdict-engine">
+    Full explanation of how VerdictEngine evaluates evidence and produces a verdict.
+  </Card>
+  <Card title="VPN app catalog" icon="book" href="/reference/vpn-app-catalog">
+    The catalog that backs INSTALLED_APP, VPN_SERVICE_DECLARATION, and LOCAL_PROXY evidence.
+  </Card>
+  <Card title="Bypass checker" icon="magnifying-glass" href="/modules/bypass-checker">
+    How XRAY_API, SPLIT_TUNNEL_BYPASS, and VPN_GATEWAY_LEAK evidence is produced.
+  </Card>
+  <Card title="Indirect signs module" icon="radar" href="/modules/indirect-signs">
+    Sources of NETWORK_INTERFACE, ROUTING, DNS, ACTIVE_VPN, and PROXY_TECHNICAL_SIGNAL evidence.
+  </Card>
+</CardGroup>

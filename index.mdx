@@ -1,97 +1,65 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "RKNHardering: detect VPNs and proxies on Android"
+description: "RKNHardering is an Android app that detects VPNs, proxies, and censorship circumvention tools using Roskomnadzor-style multi-signal detection methodology."
 ---
 
-## Setting up
+RKNHardering is an open-source Android application that detects whether a device is using a VPN, proxy, or other censorship circumvention tool. It implements the Roskomnadzor-style methodology: six independent detection modules run in parallel, each gathering signals from different system layers — GeoIP, network capabilities, routing tables, DNS, localhost ports, and location data — then a verdict engine combines them into a final verdict.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="circle-info" href="/introduction">
+    Learn what RKNHardering does, how it works, and what detection verdicts mean.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Download, install, and run your first VPN detection check in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Explore the six-module parallel detection pipeline and how results flow together.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Detection modules" icon="shield-halved" href="/modules/geo-ip">
+    Deep-dive into every detection module: GeoIP, direct signs, indirect signs, bypass, and more.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## How detection works
 
-Everything you need to create world-class documentation.
+RKNHardering runs six modules in parallel every time you tap **Run Check**. Each module targets a different signal layer, so a single circumvention tool is unlikely to hide from all of them at once.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Tap Run Check">
+    The app launches all six detection modules concurrently via `VpnCheckRunner`. Each module reports results as soon as it finishes — you see cards appear in real time.
+  </Step>
+  <Step title="Modules gather signals">
+    Modules query GeoIP APIs, inspect `NetworkCapabilities`, scan network interfaces, analyze routing tables, probe localhost ports, and check telephony/cell data.
+  </Step>
+  <Step title="VerdictEngine calculates a verdict">
+    The verdict engine applies unconditional bypass rules first, then evaluates a three-axis signal matrix (GeoIP × direct × indirect) to produce one of three verdicts.
+  </Step>
+  <Step title="Review your results">
+    Each module card shows its status and findings. Tap **Verdict details** to see the full breakdown of what was detected and why.
+  </Step>
+</Steps>
 
-## Need inspiration?
+## Verdict states
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+| Verdict | Meaning |
+|---------|---------|
+| `NOT_DETECTED` | No significant VPN or proxy signals found |
+| `NEEDS_REVIEW` | One or more ambiguous signals — manual inspection recommended |
+| `DETECTED` | Strong evidence of an active VPN, proxy, or bypass tool |
+
+## Key capabilities
+
+<CardGroup cols={2}>
+  <Card title="Bypass scanner" icon="magnifying-glass" href="/modules/bypass-checker">
+    Scans localhost ports 1024–65535 for SOCKS5 and HTTP CONNECT proxies, and calls the Xray gRPC API directly.
+  </Card>
+  <Card title="VPN app catalog" icon="book" href="/reference/vpn-app-catalog">
+    Signatures for 20+ known VPN and proxy apps including v2rayNG, Hiddify, sing-box, and WireGuard.
+  </Card>
+  <Card title="Verdict engine" icon="scale-balanced" href="/architecture/verdict-engine">
+    Weighted signal matrix combining GeoIP, direct, and indirect signals with unconditional bypass rules.
+  </Card>
+  <Card title="Evidence sources" icon="list-check" href="/reference/evidence-sources">
+    Full reference for every evidence source type and how it contributes to the final verdict.
+  </Card>
+</CardGroup>

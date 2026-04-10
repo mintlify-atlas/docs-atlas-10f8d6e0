@@ -1,0 +1,68 @@
+---
+title: "Android permissions required and detection degradation"
+description: "Every Android permission the app requests, what detection capability each enables, and how the check degrades if location permissions are denied."
+---
+
+RKNHardering requests seven Android permissions. Four are normal permissions granted automatically at install time. Three are runtime permissions that the OS presents to the user with an approval dialog. No permission is optional in the sense that all of them contribute to detection accuracy, but the app degrades gracefully when runtime permissions are denied.
+
+## Permission reference
+
+| Permission | Category | What it enables |
+|-----------|----------|-----------------|
+| `INTERNET` | Normal | Outbound HTTPS to GeoIP APIs (`ipapi.is`, `iplocate.io`), BeaconDB geolocation (`api.beacondb.net`), public IP checkers (`ifconfig.me`, Yandex, `checkip.amazonaws.com`, `ipify`), and the bypass confirmation fetch inside `UnderlyingNetworkProber`. Without this permission the app cannot run any check. |
+| `ACCESS_NETWORK_STATE` | Normal | `ConnectivityManager.getNetworkCapabilities` and `ConnectivityManager.getLinkProperties` — the foundation of `DirectSignsChecker` and `IndirectSignsChecker`. Required to read `TRANSPORT_VPN`, `NOT_VPN`, DNS server lists, and active routes. |
+| `ACCESS_WIFI_STATE` | Normal | `WifiManager.scanResults` and the current `BSSID`. Used by `LocationSignalsChecker` to collect Wi-Fi access point data for BeaconDB geolocation queries. |
+| `CHANGE_WIFI_STATE` | Normal | Triggers a fresh Wi-Fi scan via `WifiManager.startScan`. Without this permission the app falls back to the cached scan results, which may be stale and reduce BeaconDB geolocation accuracy. |
+| `ACCESS_COARSE_LOCATION` | Runtime | `TelephonyManager.networkOperator`, `networkCountryIso`, and `networkOperatorName`. Required for cell tower lookup. Also a prerequisite for `ACCESS_FINE_LOCATION` — Android will not grant fine location without coarse. |
+| `ACCESS_FINE_LOCATION` | Runtime | `TelephonyManager.requestCellInfoUpdate` and `allCellInfo` for precise cell tower data. Required for BeaconDB cell geolocation. Without this, `LocationSignalsChecker` cannot obtain per-cell RSSI and timing data and the BeaconDB request may be incomplete. |
+| `NEARBY_WIFI_DEVICES` | Runtime (Android 13+) | On Android 13 and later, `WifiManager.scanResults` requires this permission in addition to `ACCESS_FINE_LOCATION`. Without it, `LocationSignalsChecker` cannot read Wi-Fi scan results on Android 13+ devices, so the Wi-Fi geolocation path is unavailable. On Android 12 and earlier this permission is ignored. |
+
+<Info>
+  All seven permissions are declared in `AndroidManifest.xml`. The `<queries>` block in the manifest also enumerates the 24 VPN/proxy package names from `VpnAppCatalog` and declares a `VpnService` intent query, so that `PackageManager` visibility rules on Android 11+ allow `InstalledVpnAppDetector` to see those packages. The `<queries>` block does not require a user-facing permission grant.
+</Info>
+
+## What degrades when location permissions are denied
+
+`LocationSignalsChecker` still runs when location permissions are denied. It can still read `TelephonyManager.networkOperator` and `simCountryIso` without runtime permission, which provides the MCC/SIM country code. However, the following capabilities are unavailable:
+
+- **Cell tower data** — `requestCellInfoUpdate` and `allCellInfo` require `ACCESS_FINE_LOCATION`. Without it, no per-cell data is collected and the BeaconDB cell geolocation path is skipped.
+- **Wi-Fi scan results** — `WifiManager.scanResults` requires `ACCESS_COARSE_LOCATION` (Android ≤ 12) or `NEARBY_WIFI_DEVICES` (Android 13+). Without the applicable permission, no BSSIDs are collected and the Wi-Fi geolocation path is skipped.
+- **BeaconDB query** — if both cell and Wi-Fi data are absent, `LocationSignalsChecker` skips the BeaconDB HTTP request entirely.
+
+In this degraded state `LocationSignalsChecker` emits informational findings explaining what was unavailable. The remaining five detection modules run normally, and `VerdictEngine` can still reach a `DETECTED` verdict through the geo, direct, and indirect matrix axes and through unconditional bypass evidence.
+
+<Note>
+  The only unconditional rule in `VerdictEngine` that depends on location data is the Russia-confirmation shortcut: if `network_mcc_ru:true`, `cell_country_ru:true`, or `location_country_ru:true` appears in `LocationSignalsChecker` findings while `GeoIP` shows a foreign IP, the engine returns `DETECTED` immediately. Denying location permissions disables this particular shortcut. All other verdict paths remain fully operational.
+</Note>
+
+## Permission request flow
+
+When you launch RKNHardering for the first time, the app presents a rationale dialog explaining why location permissions improve detection accuracy. If you grant the permissions, they remain active for all subsequent checks.
+
+If you deny the permissions:
+
+1. The app shows a toast notification explaining that detection accuracy may be reduced.
+2. If the OS has blocked the system permission dialog from being shown again (because you selected "Don't ask again"), the app opens the system app settings screen so you can grant the permissions manually.
+
+You can re-run a check at any time. If you later grant permissions through system settings, the next check picks them up automatically — no restart is required.
+
+## Privacy mode and permissions
+
+Privacy mode, when enabled, masks IP addresses in the results UI by replacing them with anonymized placeholders. It does **not** change which permissions the app needs or requests. All seven permissions are required regardless of whether privacy mode is on or off. Privacy mode is a display-layer feature only.
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Location signals module" icon="location-dot" href="/modules/location-signals">
+    How MCC, cell tower, Wi-Fi, and BeaconDB signals are collected and what each one contributes.
+  </Card>
+  <Card title="Direct signs module" icon="circle-dot" href="/modules/direct-signs">
+    NetworkCapabilities and system proxy checks that depend on ACCESS_NETWORK_STATE.
+  </Card>
+  <Card title="Bypass checker" icon="magnifying-glass" href="/modules/bypass-checker">
+    The underlying network prober that uses INTERNET to fetch IPs over bound sockets.
+  </Card>
+  <Card title="VPN app catalog" icon="book" href="/reference/vpn-app-catalog">
+    The package list that the manifest queries block is derived from.
+  </Card>
+</CardGroup>

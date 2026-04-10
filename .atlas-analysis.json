@@ -1,0 +1,77 @@
+{
+  "projectType": "general",
+  "projectName": "RKNHardering",
+  "projectDescription": "An Android app that detects VPNs, proxies, and censorship circumvention tools on a device using Roskomnadzor-style detection methodology.",
+  "theme": "aspen",
+  "primaryColor": "#C62828",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "build"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/verdict-engine",
+              "architecture/check-settings"
+            ]
+          },
+          {
+            "group": "Detection Modules",
+            "pages": [
+              "modules/geo-ip",
+              "modules/direct-signs",
+              "modules/indirect-signs",
+              "modules/bypass-checker",
+              "modules/location-signals",
+              "modules/ip-comparison"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/vpn-app-catalog",
+              "reference/evidence-sources",
+              "reference/permissions"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Six parallel detection modules covering GeoIP, network capabilities, routing, DNS, and bypass scanning",
+    "Verdict engine with weighted signal matrix producing NOT_DETECTED, NEEDS_REVIEW, or DETECTED outcomes",
+    "Xray/V2Ray gRPC API scanning to detect active proxy cores",
+    "Localhost proxy scanner (SOCKS5 and HTTP CONNECT) across ports 1024–65535",
+    "VPN app catalog with signatures for 20+ known VPN/proxy applications",
+    "Location-based detection using MCC, SIM, cell towers, Wi-Fi, and BeaconDB",
+    "Underlying network leak detection when VPN is active",
+    "Privacy mode to mask IP addresses in the UI",
+    "DNS-over-HTTPS resolver support with configurable upstream servers",
+    "Multilingual UI: English, Russian, Persian, and Chinese"
+  ],
+  "publicApiSurface": [
+    "VpnCheckRunner.run(context, settings, onUpdate) — runs all checkers in parallel and returns CheckResult",
+    "VerdictEngine.evaluate(geoIp, directSigns, indirectSigns, locationSignals, bypassResult) — computes final Verdict",
+    "CheckSettings — configuration for split tunnel, network requests, DNS resolver, and port range",
+    "CheckUpdate sealed interface — streaming updates: GeoIpReady, DirectSignsReady, BypassProgress, VerdictReady, etc.",
+    "VpnAppCatalog.signatures — list of known VPN/proxy app signatures",
+    "VpnAppCatalog.findByPackageName(packageName) — look up a VPN app by package name",
+    "CategoryResult — result model for each detection category with findings and evidence items",
+    "BypassResult — result model for bypass/proxy scan including proxy endpoint and IP comparison",
+    "Verdict enum — NOT_DETECTED, NEEDS_REVIEW, DETECTED",
+    "EvidenceSource enum — categorizes evidence by origin (GEO_IP, SYSTEM_PROXY, XRAY_API, etc.)"
+  ]
+}

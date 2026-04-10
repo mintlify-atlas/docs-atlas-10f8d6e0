@@ -1,0 +1,151 @@
+---
+title: "CheckSettings: configure modules, DNS, and port range"
+description: "CheckSettings controls which modules run: split tunnel scan, network requests, DNS resolver mode, and port range bounds for the localhost proxy scanner."
+---
+
+`CheckSettings` is a data class you pass to `VpnCheckRunner.run()` to control how a check behaves. Every field has a sensible default so you can run a full check with no configuration at all, or selectively disable or tune individual modules.
+
+```kotlin
+data class CheckSettings(
+    val splitTunnelEnabled: Boolean = true,
+    val networkRequestsEnabled: Boolean = true,
+    val resolverConfig: DnsResolverConfig = DnsResolverConfig.system(),
+    val portRange: String = "full",
+    val portRangeStart: Int = 1024,
+    val portRangeEnd: Int = 65535,
+)
+```
+
+## Fields
+
+<ParamField path="splitTunnelEnabled" type="Boolean" default="true">
+  Enables `BypassChecker`. When `true`, the check runs the localhost proxy scanner (`ProxyScanner`), the Xray gRPC API scanner (`XrayApiScanner`), and the underlying network prober (`UnderlyingNetworkProber`).
+
+  When `false`, `BypassChecker` is skipped entirely and the bypass card is hidden in the UI. Port range settings have no effect while this is `false`.
+</ParamField>
+
+<ParamField path="networkRequestsEnabled" type="Boolean" default="true">
+  Enables `GeoIpChecker` and `IpComparisonChecker`. When `true`, the check makes outbound HTTPS requests to GeoIP providers (`api.ipapi.is`, `iplocate.io`) and to the IP comparison services.
+
+  When `false`, both checkers are skipped and their cards are hidden in the UI. `LocationSignalsChecker` also uses this flag to decide whether to call the BeaconDB geolocation API.
+
+  <Warning>
+    Disabling network requests means the check cannot retrieve your public IP or any GeoIP data. The GeoIP matrix input will always be `false`, which can affect the final verdict. The app shows a confirmation dialog before saving this setting.
+  </Warning>
+</ParamField>
+
+<ParamField path="resolverConfig" type="DnsResolverConfig" default="DnsResolverConfig.system()">
+  Controls how DNS resolution is performed during the check. Used by `GeoIpChecker`, `IpComparisonChecker`, and `LocationSignalsChecker` when making network requests.
+
+  Three resolver modes are available:
+
+  | Mode | Description |
+  |------|-------------|
+  | `SYSTEM` | Uses the Android system resolver — the default. Whatever DNS the active network (including VPN) provides is used. |
+  | `DIRECT` | Sends UDP DNS queries directly to explicit IP addresses, bypassing the system resolver. Useful when you want to resolve names without going through a VPN-injected DNS. |
+  | `DOH` | Sends DNS queries over HTTPS to a DoH endpoint. Bootstrap IP addresses are used to reach the DoH server without relying on the system resolver. |
+
+  Built-in presets are available for Cloudflare (`1.1.1.1`), Google (`8.8.8.8`), and Yandex (`77.88.8.8`). You can also supply custom server addresses or a custom DoH URL.
+
+  <Tip>
+    Using DNS-over-HTTPS (DoH) mode can bypass DNS-based VPN detection interference. If your VPN intercepts DNS queries, switching to DoH with a preset like Cloudflare ensures GeoIP lookups resolve through a path the VPN cannot easily manipulate.
+  </Tip>
+</ParamField>
+
+<ParamField path="portRange" type="String" default='"full"'>
+  Selects the port range strategy for `ProxyScanner`. Accepted values:
+
+  | Value | Behavior |
+  |-------|----------|
+  | `"popular"` | Scans only the ports listed in `VpnAppCatalog.localhostProxyPorts` plus `1081`, `7890`, `7891`. Much faster; catches most common VPN apps. |
+  | `"extended"` | Scans popular ports first, then the range `1024–15000`. A middle ground between speed and coverage. |
+  | `"full"` | Scans popular ports first, then the full range `1024–65535`. Most thorough; uses `portRangeStart` and `portRangeEnd` as bounds when set. |
+  | `"custom"` | Scans popular ports first, then the custom range defined by `portRangeStart` and `portRangeEnd`. |
+
+  For `"popular"`, `"extended"`, and `"full"`, popular ports are always scanned first in `AUTO` order before the wider range begins. Any unrecognised value falls back to `"full"` behaviour.
+</ParamField>
+
+<ParamField path="portRangeStart" type="Int" default="1024">
+  The lower bound of the port range when `portRange` is `"custom"`. Must be between `1024` and `65535`. Values outside this range are clamped to the nearest bound.
+
+  This field has no effect when `portRange` is `"popular"`, `"extended"`, or `"full"`.
+</ParamField>
+
+<ParamField path="portRangeEnd" type="Int" default="65535">
+  The upper bound of the port range when `portRange` is `"custom"`. Must be between `1024` and `65535`. Values outside this range are clamped. Must be greater than or equal to `portRangeStart`.
+
+  This field has no effect when `portRange` is `"popular"`, `"extended"`, or `"full"`.
+</ParamField>
+
+## Constructing a custom CheckSettings
+
+Pass a `CheckSettings` instance as the second argument to `VpnCheckRunner.run()`. Any field you omit uses its default.
+
+```kotlin
+// Run a privacy-conscious check: no outbound network requests,
+// DoH resolver with Cloudflare, scan only popular ports.
+val settings = CheckSettings(
+    networkRequestsEnabled = false,
+    splitTunnelEnabled = true,
+    resolverConfig = DnsResolverConfig(
+        mode = DnsResolverMode.DOH,
+        preset = DnsResolverPreset.CLOUDFLARE,
+    ),
+    portRange = "popular",
+)
+
+val result: CheckResult = VpnCheckRunner.run(
+    context = context,
+    settings = settings,
+    onUpdate = { update ->
+        // handle streaming UI updates
+    },
+)
+```
+
+```kotlin
+// Custom port range with a direct UDP DNS resolver.
+val settings = CheckSettings(
+    resolverConfig = DnsResolverConfig(
+        mode = DnsResolverMode.DIRECT,
+        preset = DnsResolverPreset.GOOGLE,
+    ),
+    portRange = "custom",
+    portRangeStart = 8000,
+    portRangeEnd = 9999,
+)
+
+val result = VpnCheckRunner.run(context, settings)
+```
+
+## Settings screen (UI)
+
+All `CheckSettings` fields map directly to controls in the app's Settings screen (`SettingsActivity`).
+
+| UI control | CheckSettings field | Notes |
+|------------|--------------------|----|
+| Split tunnel scan toggle | `splitTunnelEnabled` | Disabling this also greys out the port range card |
+| Network requests toggle | `networkRequestsEnabled` | App shows a confirmation dialog before disabling |
+| Privacy mode toggle | — | Hides raw IP values in the UI; does not affect detection logic |
+| DNS resolver mode chips | `resolverConfig.mode` | System / Direct / DoH |
+| DNS resolver preset chips | `resolverConfig.preset` | Custom / Cloudflare / Google / Yandex |
+| DNS server address fields | `resolverConfig.customDirectServers` / `customDohUrl` / `customDohBootstrapHosts` | Only editable when preset is Custom |
+| Port range chips | `portRange` | Popular / Extended (1024–15000) / Full (1024–65535) / Custom |
+| Port start / end fields | `portRangeStart`, `portRangeEnd` | Visible only when Custom is selected |
+
+## Explore further
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    How VpnCheckRunner coordinates all six modules using these settings.
+  </Card>
+  <Card title="VerdictEngine" icon="scale-balanced" href="/architecture/verdict-engine">
+    How the final verdict is computed from module results.
+  </Card>
+  <Card title="BypassChecker" icon="magnifying-glass" href="/modules/bypass-checker">
+    Details on the proxy scanner and Xray API scanner that use portRange.
+  </Card>
+  <Card title="Permissions" icon="shield-halved" href="/reference/permissions">
+    Android permissions required for location signals and other checks.
+  </Card>
+</CardGroup>

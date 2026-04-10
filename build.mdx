@@ -1,0 +1,72 @@
+---
+title: "Build RKNHardering from source with Gradle"
+description: "Set up your build environment, clone the repository, and compile a debug APK with a single Gradle command. Requires JDK 17+ and Android SDK API 36."
+---
+
+RKNHardering is not distributed through the Play Store, so building from source is the primary way to get the app. The build system uses Gradle with the Android Gradle Plugin — no IDE is required, though Android Studio works fine if you prefer it.
+
+## Requirements
+
+- **JDK 17 or later** — the project sets `sourceCompatibility` and `targetCompatibility` to Java 11, but Gradle itself requires JDK 17+.
+- **Android SDK** with **Build Tools for API 36** — `compileSdk` is set to API 36.
+
+<Tip>
+The Android SDK and the correct build tools ship with Android Studio. If you prefer a headless setup, install the [Android command-line tools](https://developer.android.com/studio#command-line-tools-only) and run `sdkmanager "build-tools;36.0.0" "platforms;android-36"`.
+</Tip>
+
+## Build steps
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/xtclovver/RKNHardering.git
+    cd RKNHardering
+    ```
+  </Step>
+
+  <Step title="Verify your JDK version">
+    ```bash
+    java -version
+    ```
+
+    The output should show version 17 or later. If not, install a compatible JDK and ensure it is on your `PATH`, or set the `JAVA_HOME` environment variable.
+  </Step>
+
+  <Step title="Run the debug build">
+    ```bash
+    ./gradlew assembleDebug
+    ```
+
+    On Windows, use `gradlew.bat assembleDebug` instead. Gradle downloads all dependencies automatically on the first run, which may take a few minutes.
+  </Step>
+
+  <Step title="Locate the output APK">
+    The compiled APK is written to:
+
+    ```
+    app/build/outputs/apk/debug/app-debug.apk
+    ```
+
+    Transfer this file to your Android device and install it by following the [sideloading steps](/quickstart#installation) in the quickstart guide.
+  </Step>
+</Steps>
+
+## Version name
+
+The app version is controlled by the `appVersionName` property in `gradle.properties`:
+
+```properties
+appVersionName=2.0.0
+```
+
+The value must match the `X.Y.Z` format where `Y` and `Z` are each between 0 and 99. The build script derives `versionCode` automatically: `major × 10000 + minor × 100 + patch`.
+
+<Note>
+The release workflow overrides `appVersionName` from the git tag. For local debug builds, the value in `gradle.properties` is used as-is.
+</Note>
+
+To build with a specific version name without modifying `gradle.properties`, pass it as a Gradle property on the command line:
+
+```bash
+./gradlew assembleDebug -PappVersionName=2.1.0
+```

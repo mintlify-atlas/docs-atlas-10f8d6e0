@@ -1,0 +1,58 @@
+---
+title: "RKNHardering: Android VPN and proxy detection app"
+description: "An Android app that detects VPNs, proxies, and censorship circumvention tools using Roskomnadzor-style multi-signal detection methodology."
+---
+
+RKNHardering is an Android application that detects whether a device is routing traffic through a VPN, proxy, or censorship circumvention tool. It implements the same multi-signal detection methodology that Roskomnadzor (Russia's federal internet regulator) uses to identify circumvention tools — querying GeoIP databases, inspecting network interfaces, scanning localhost ports, reading telephony signals, and more — and then combines the results into a single, actionable verdict.
+
+The app is designed for security researchers, network auditors, and developers who need to verify that a device's network posture matches expectations before or after deploying circumvention software.
+
+## Detection modules
+
+Six independent check modules run in parallel. Each module contributes findings that feed into the `VerdictEngine`, which produces the final result.
+
+| Module | What it checks |
+|---|---|
+| **GeoIP** | Public IP geolocation, hosting/datacenter flags, and proxy/VPN/Tor signals from `ipapi.is` and `iplocate.io` |
+| **IP comparison** | Whether RU and non-RU public IP checkers return the same address (diagnostic, does not affect the verdict) |
+| **Direct signs** | `NetworkCapabilities.TRANSPORT_VPN`, system HTTP/SOCKS proxy settings, and installed VPN/proxy apps |
+| **Indirect signs** | VPN-like network interfaces, MTU anomalies, routing table, DNS servers, localhost port listeners, and `dumpsys` output |
+| **Location signals** | MCC/SIM operator, cell tower info, Wi-Fi BSSIDs, and BeaconDB geolocation to confirm physical location in Russia |
+| **Bypass checker** | Localhost SOCKS5/HTTP proxy scan, Xray gRPC API detection, and underlying network leak when a VPN is active |
+
+See the [Architecture overview](/architecture/overview) for how modules interact, or jump directly to any [detection module](/modules/geo-ip) for full signal tables.
+
+## Verdict states
+
+After all modules complete, `VerdictEngine` reduces the findings to one of three states:
+
+**`NOT_DETECTED`** — No reliable signals of a VPN, proxy, or circumvention tool were found. The device appears to be using a direct, unmodified connection.
+
+**`NEEDS_REVIEW`** — One or more weak or ambiguous signals were found that are consistent with a VPN or proxy but are not conclusive on their own. Common causes include a foreign GeoIP without corroborating direct or indirect signals, an installed VPN app that is not currently active, or an open localhost proxy port without confirmed bypass.
+
+**`DETECTED`** — Strong, corroborating evidence confirms that a VPN, proxy, or bypass tool is active. The engine reaches this verdict when bypass evidence (split tunnel, Xray API, VPN gateway leak) is present, when location signals confirm Russia but GeoIP shows a foreign IP, or when multiple signal categories agree.
+
+<Note>
+`IpComparisonChecker` is shown in the results UI as a diagnostic block but does not participate in verdict calculation in the current version.
+</Note>
+
+## Requirements and languages
+
+RKNHardering requires **Android 8.0 (API 26)** or later. The app is available in four languages: **English**, **Russian** (`ru`), **Persian** (`fa`), and **Chinese Simplified** (`zh-CN`).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Get started" icon="rocket" href="/quickstart">
+    Install the app and run your first check in minutes.
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand how the six modules and VerdictEngine work together.
+  </Card>
+  <Card title="Bypass checker" icon="shield-halved" href="/modules/bypass-checker">
+    Learn how the proxy scanner, Xray API detector, and underlying network prober work.
+  </Card>
+  <Card title="VPN app catalog" icon="book" href="/reference/vpn-app-catalog">
+    Browse the known VPN and proxy package signatures used for app detection.
+  </Card>
+</CardGroup>

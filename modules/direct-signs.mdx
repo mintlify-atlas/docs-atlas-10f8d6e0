@@ -1,0 +1,85 @@
+---
+title: "DirectSignsChecker: NetworkCapabilities and system proxy"
+description: "Inspects NetworkCapabilities for VPN transport, reads system proxy properties, and scans for installed VPN or proxy apps — without active network probing."
+---
+
+`DirectSignsChecker` reads system state that Android exposes without any active scanning. It runs three sub-checks in sequence and aggregates their results into a single `CategoryResult`. Only the `NetworkCapabilities` and system proxy sub-checks can set `detected = true`; the installed-app sub-check is diagnostic only.
+
+## 1. NetworkCapabilities (`checkVpnTransport`)
+
+The checker calls `ConnectivityManager.getNetworkCapabilities(activeNetwork)` and tests three independent VPN indicators on the resulting `NetworkCapabilities` object.
+
+| Check | Detection method | Result |
+|-------|-----------------|--------|
+| `TRANSPORT_VPN` | `caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)` | `detected = true` |
+| `IS_VPN` | `caps.toString().contains("IS_VPN")` | `detected = true` |
+| `VpnTransportInfo` | `caps.toString().contains("VpnTransportInfo")` | `detected = true` |
+
+`IS_VPN` and `VpnTransportInfo` are checked through the string representation of `NetworkCapabilities` because the corresponding constants or types are not part of the public SDK surface on all supported API levels.
+
+All three checks produce `EvidenceSource.DIRECT_NETWORK_CAPABILITIES` evidence items with `HIGH` confidence.
+
+## 2. System proxy (`checkSystemProxy`)
+
+The checker reads four JVM system properties that Android and the system proxy configuration layer populate when a proxy is active.
+
+```kotlin
+System.getProperty("http.proxyHost")  // with Proxy.getDefaultHost() fallback
+System.getProperty("http.proxyPort")  // with Proxy.getDefaultPort() fallback
+System.getProperty("socksProxyHost")
+System.getProperty("socksProxyPort")
+```
+
+Both HTTP and SOCKS proxy configurations are evaluated independently using the same logic:
+
+| State | Result |
+|-------|--------|
+| Host is absent | Proxy treated as not configured — no finding added |
+| Host present, port absent or invalid | `needsReview = true` |
+| Host present, port valid | `detected = true` |
+| Host present, port valid, port in known proxy port list | `detected = true` + extra finding added |
+
+**Known proxy ports:** `80`, `443`, `1080`, `3127`, `3128`, `4080`, `5555`, `7000`, `7044`, `8000`, `8080`, `8081`, `8082`, `8888`, `9000`, `9050`, `9051`, `9150`, `12345`, and the range `16000–16100`.
+
+Evidence items carry `EvidenceSource.SYSTEM_PROXY`. Confidence is `MEDIUM` when the port matches a known proxy port, and `LOW` otherwise.
+
+## 3. Installed VPN/proxy apps (`InstalledVpnAppDetector`)
+
+This sub-check looks for installed software from two sources:
+
+- **Package signatures** — compares installed package names against the [`VpnAppCatalog`](/reference/vpn-app-catalog) list of known VPN and proxy clients.
+- **VpnService declaration** — calls `PackageManager.queryIntentServices(VpnService.SERVICE_INTERFACE)` to find apps that declare the standard VPN service intent.
+
+<Warning>
+  Detecting an installed app is **not** the same as detecting an active VPN tunnel. An app may be installed but not running, or configured to route only specific traffic. Matches from this sub-check set `needsReview = true` but do **not** set `DirectSignsChecker.detected = true`.
+</Warning>
+
+Matched apps are returned as `MatchedVpnApp` records in the `CategoryResult`. They appear in the UI as diagnostic information. The corresponding evidence items carry `EvidenceSource.INSTALLED_APP` or `EvidenceSource.VPN_SERVICE_DECLARATION` and are **excluded** from the `VerdictEngine` matrix.
+
+## VerdictEngine matrix contribution
+
+`DirectSignsChecker` populates the **`directMatrixHit`** column in the verdict matrix when any evidence item with source `DIRECT_NETWORK_CAPABILITIES` or `SYSTEM_PROXY` is present.
+
+| Geo | Direct | Indirect | Verdict |
+|-----|--------|----------|---------|
+| no | yes | no | `NOT_DETECTED` |
+| yes | yes | no | `DETECTED` |
+| no | yes | yes | `NEEDS_REVIEW` |
+| yes | yes | yes | `DETECTED` |
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="IndirectSignsChecker" href="/modules/indirect-signs">
+    Deeper network anomaly checks: interfaces, MTU, routing, DNS, and dumpsys.
+  </Card>
+  <Card title="VpnAppCatalog" href="/reference/vpn-app-catalog">
+    Package signatures and port lists used by the installed-app detector.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    How direct signals feed into the final verdict matrix.
+  </Card>
+  <Card title="Permissions" href="/reference/permissions">
+    Android permissions required by each checker.
+  </Card>
+</CardGroup>

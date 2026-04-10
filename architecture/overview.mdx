@@ -1,0 +1,142 @@
+---
+title: "Detection pipeline: six parallel modules and VerdictEngine"
+description: "Six parallel detection modules feed results into VerdictEngine, which applies unconditional bypass rules and a three-axis signal matrix to produce a final verdict."
+---
+
+RKNHardering runs six detection modules concurrently every time you trigger a check. Each module targets a different signal layer and emits its result independently. `VpnCheckRunner` coordinates all six modules, streams `CheckUpdate` events to the UI as each module finishes, and then calls `VerdictEngine` once all results are available.
+
+## Pipeline structure
+
+```text
+VpnCheckRunner
+├── GeoIpChecker           — GeoIP + hosting/proxy signals
+├── IpComparisonChecker    — RU/non-RU IP checkers (diagnostics)
+├── DirectSignsChecker     — NetworkCapabilities, system proxy, installed VPN apps
+├── IndirectSignsChecker   — interfaces, routes, DNS, dumpsys, proxy-tech signals
+├── LocationSignalsChecker — MCC/SIM/cell/Wi-Fi/BeaconDB
+└── BypassChecker          — localhost proxy, Xray gRPC API, underlying-network leak
+        └── VerdictEngine  — final verdict logic
+```
+
+## VpnCheckRunner
+
+`VpnCheckRunner` is the top-level coordinator. It launches all six checkers inside a single `coroutineScope` using `async`, so they all run in parallel. As each module completes, `VpnCheckRunner` invokes the `onUpdate` callback with a typed `CheckUpdate` event — the UI can render each card as soon as its data arrives rather than waiting for the full check to finish.
+
+```kotlin
+object VpnCheckRunner {
+
+    suspend fun run(
+        context: Context,
+        settings: CheckSettings = CheckSettings(),
+        onUpdate: (suspend (CheckUpdate) -> Unit)? = null,
+    ): CheckResult = coroutineScope {
+        // six async { … } blocks launch all modules in parallel
+        // onUpdate is called as each module completes
+        // VerdictEngine.evaluate(…) is called once all results are in
+    }
+}
+```
+
+<Note>
+  `IpComparisonChecker` participates in the parallel run and its result appears in the UI, but it does **not** feed into `VerdictEngine`. It is a diagnostic block only.
+</Note>
+
+## Streaming updates: CheckUpdate
+
+`CheckUpdate` is a sealed interface that lets the UI react to results incrementally. Each variant carries the result from one module.
+
+```kotlin
+sealed interface CheckUpdate {
+    data class GeoIpReady(val result: CategoryResult) : CheckUpdate
+    data class IpComparisonReady(val result: IpComparisonResult) : CheckUpdate
+    data class DirectSignsReady(val result: CategoryResult) : CheckUpdate
+    data class IndirectSignsReady(val result: CategoryResult) : CheckUpdate
+    data class LocationSignalsReady(val result: CategoryResult) : CheckUpdate
+    data class BypassProgress(val progress: BypassChecker.Progress) : CheckUpdate
+    data class BypassReady(val result: BypassResult) : CheckUpdate
+    data class VerdictReady(val verdict: Verdict) : CheckUpdate
+}
+```
+
+`BypassProgress` is emitted multiple times during the port scan so the UI can show live scan progress. All other events are emitted exactly once.
+
+## Data model: CheckResult
+
+`CheckResult` is the final aggregate returned by `VpnCheckRunner.run()`. It contains results from all six modules plus the computed verdict.
+
+```kotlin
+data class CheckResult(
+    val geoIp: CategoryResult,
+    val ipComparison: IpComparisonResult,
+    val directSigns: CategoryResult,
+    val indirectSigns: CategoryResult,
+    val locationSignals: CategoryResult,
+    val bypassResult: BypassResult,
+    val verdict: Verdict,
+)
+```
+
+### CategoryResult
+
+Five of the six modules return a `CategoryResult`. It is the standard container for a module's findings and evidence.
+
+```kotlin
+data class CategoryResult(
+    val name: String,
+    val detected: Boolean,
+    val findings: List<Finding>,
+    val needsReview: Boolean = false,
+    val evidence: List<EvidenceItem> = emptyList(),
+    val matchedApps: List<MatchedVpnApp> = emptyList(),
+    val activeApps: List<ActiveVpnApp> = emptyList(),
+)
+```
+
+| Field | Description |
+|-------|-------------|
+| `detected` | `true` if the module found confirmed VPN/proxy evidence |
+| `needsReview` | `true` if signals are present but not conclusive |
+| `findings` | Human-readable list of individual signal results |
+| `evidence` | Typed `EvidenceItem` list used by `VerdictEngine` |
+| `matchedApps` | VPN apps matched against the catalog |
+| `activeApps` | VPN apps confirmed as currently running |
+
+### Verdict
+
+`VerdictEngine` produces one of three values:
+
+```kotlin
+enum class Verdict {
+    NOT_DETECTED,
+    NEEDS_REVIEW,
+    DETECTED,
+}
+```
+
+## What each module checks
+
+| Module | Signal layer | Feeds VerdictEngine |
+|--------|-------------|---------------------|
+| `GeoIpChecker` | External IP geolocation, hosting/proxy flags | Yes |
+| `IpComparisonChecker` | RU vs non-RU public IP checker consensus | **No** (diagnostic only) |
+| `DirectSignsChecker` | `NetworkCapabilities`, system proxy, installed VPN apps | Yes |
+| `IndirectSignsChecker` | Network interfaces, routing, DNS, dumpsys, proxy ports | Yes |
+| `LocationSignalsChecker` | MCC, SIM, cell towers, Wi-Fi, BeaconDB geolocation | Yes |
+| `BypassChecker` | Localhost proxy scan, Xray gRPC API, underlying network leak | Yes |
+
+## Explore further
+
+<CardGroup cols={2}>
+  <Card title="VerdictEngine" icon="scale-balanced" href="/architecture/verdict-engine">
+    How the two-phase decision logic turns module results into a final verdict.
+  </Card>
+  <Card title="Check settings" icon="sliders" href="/architecture/check-settings">
+    All options in CheckSettings: split tunnel scan, network requests, DNS resolver, port range.
+  </Card>
+  <Card title="BypassChecker" icon="magnifying-glass" href="/modules/bypass-checker">
+    Localhost proxy scanner, Xray gRPC API scanner, and underlying network prober.
+  </Card>
+  <Card title="Evidence sources" icon="list-check" href="/reference/evidence-sources">
+    Full reference for every EvidenceSource value and how it maps to VerdictEngine inputs.
+  </Card>
+</CardGroup>

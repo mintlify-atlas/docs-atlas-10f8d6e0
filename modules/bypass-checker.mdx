@@ -1,0 +1,121 @@
+---
+title: "BypassChecker: proxy scan, Xray API, and network leak probe"
+description: "Actively probes localhost for open proxies, scans for the Xray gRPC management API, and tests whether the underlying non-VPN network is reachable while a VPN is active."
+---
+
+`BypassChecker` is the only checker that actively sends network traffic from the device. Its three sub-probes run in parallel using Kotlin coroutines. Any confirmed bypass finding contributes an unconditional `DETECTED` rule in `VerdictEngine` before the matrix is evaluated.
+
+## 1. Proxy scanner (`ProxyScanner` + `ProxyProber`)
+
+The scanner iterates `127.0.0.1` and `::1` and attempts to detect unauthenticated SOCKS5 and HTTP CONNECT proxies.
+
+### Scan modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `AUTO` (default) | Scans popular ports first, then a configurable secondary range |
+| `POPULAR_ONLY` | Checks only the popular port list |
+| `MANUAL` | Checks a single specified port |
+
+**Popular ports** are built at runtime from `VpnAppCatalog.localhostProxyPorts` (the union of all `defaultPorts` across catalog entries) plus three additional ports: `1081`, `7890`, `7891`.
+
+The secondary range in `AUTO` mode is controlled by the `portRange` setting:
+
+| `portRange` value | Secondary range scanned |
+|-------------------|------------------------|
+| `"popular"` | No secondary scan (`POPULAR_ONLY` mode) |
+| `"extended"` | `1024–15000` |
+| `"full"` (default) | `1024–65535` |
+| `"custom"` | `portRangeStart–portRangeEnd` |
+
+**Full-range scan parameters:** parallelism `200`, connect timeout `80 ms`, read timeout `120 ms`.
+
+### Proxy detection protocol
+
+`ProxyProber` probes each port by sending a protocol-specific greeting and checking the response. SOCKS5 is tried first on every port; HTTP CONNECT is tried only if SOCKS5 returns an unrecognised response.
+
+| Type | Request sent | Expected response |
+|------|-------------|-------------------|
+| SOCKS5 | `0x05 0x01 0x00` (no-auth greeting) | `0x05 0x00` (version 5, method accepted) |
+| HTTP CONNECT | `CONNECT ifconfig.me:443 HTTP/1.1\r\n…` | `HTTP/1.x 200` |
+
+### Bypass confirmation
+
+Finding an open proxy alone is **not** treated as confirmed bypass:
+
+1. The scanner records the open proxy as `needsReview = true`.
+2. `BypassChecker` then fetches the public IP both directly (`IfconfigClient.fetchDirectIp`) and through the proxy (`IfconfigClient.fetchIpViaProxy`).
+3. If both IPs are available and they differ, `confirmedBypass = true`, which sets `EvidenceSource.SPLIT_TUNNEL_BYPASS` with confidence `HIGH`.
+
+### MTProto probe (informational)
+
+If a SOCKS5 proxy is found but fetching an IP through it fails, and the port is not associated with the Xray/V2Ray family in `VpnAppCatalog`, `MtProtoProber` is launched. A successful MTProto probe adds an informational finding but **does not affect the verdict**.
+
+## 2. Xray gRPC API scanner (`XrayApiScanner` + `XrayApiClient`)
+
+The Xray scanner looks for the management API exposed by Xray-core and compatible runtimes (v2rayNG, Hiddify, and similar tools).
+
+**Scan parameters:** hosts `127.0.0.1` and `::1`, range `1024–65535`, parallelism `100`, TCP connect timeout `200 ms`, gRPC deadline `2000 ms` (retried once with a 3× deadline on failure).
+
+The check uses a real gRPC call — `HandlerServiceGrpc.listOutbounds(...)` — not a raw HTTP/2 preface. This avoids false positives from other services that happen to speak HTTP/2.
+
+On success:
+
+- `detected = true` with evidence source `XRAY_API` and confidence `HIGH`.
+- Findings include up to 10 outbound summaries (`tag`, `protocol`, `address`, `port`, `sni`). If there are more than 10 outbounds, a count of remaining entries is appended.
+
+<Warning>
+  Finding the Xray API triggers an **unconditional `DETECTED`** verdict in `VerdictEngine` regardless of what the other checkers report.
+</Warning>
+
+## 3. Underlying network prober (`UnderlyingNetworkProber`)
+
+This sub-probe runs only when at least one network with `TRANSPORT_VPN` is active on the device. It attempts to bind HTTP(S) requests to a non-VPN internet-capable network to determine whether traffic can bypass the tunnel.
+
+**Steps:**
+
+1. Enumerate `ConnectivityManager.allNetworks`.
+2. Identify the VPN network (has `TRANSPORT_VPN` + `NET_CAPABILITY_INTERNET`) and collect all other internet-capable networks.
+3. Fetch the public IP through the VPN network first (to establish the VPN-side address).
+4. Iterate non-VPN networks and fetch the public IP bound to each one.
+
+**IP endpoints used:** `ifconfig.me`, `checkip.amazonaws.com`, `ipv4-internet.yandex.net`, `ipv6-internet.yandex.net` (timeout 7 s each).
+
+| Outcome | Evidence source | Result |
+|---------|----------------|--------|
+| Underlying network reachable, IPs differ | `VPN_GATEWAY_LEAK` | `detected = true` |
+| Underlying network reachable, active network is not VPN | `VPN_NETWORK_BINDING` | `detected = true` |
+| Underlying network unreachable | — | No detection |
+| VPN not active | — | Sub-probe skipped |
+
+## Final category result
+
+```
+detected    = confirmedBypass || xrayApiFound || vpnGatewayLeak || vpnNetworkBinding
+needsReview = !detected && proxyEndpoint != null
+```
+
+## VerdictEngine unconditional rules
+
+Three signals from `BypassChecker` each trigger an unconditional `DETECTED` verdict before the matrix is evaluated:
+
+1. Evidence source `SPLIT_TUNNEL_BYPASS` — direct IP differs from proxy IP.
+2. Evidence source `XRAY_API` — Xray gRPC API answered.
+3. Evidence source `VPN_GATEWAY_LEAK` or `VPN_NETWORK_BINDING` — underlying network accessible while VPN active.
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="IndirectSignsChecker" href="/modules/indirect-signs">
+    Passive proxy-technical signals from /proc/net and dumpsys.
+  </Card>
+  <Card title="VpnAppCatalog" href="/reference/vpn-app-catalog">
+    Port lists and family identifiers used by the proxy and Xray scanners.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    Unconditional detection rules triggered by bypass evidence.
+  </Card>
+  <Card title="Check settings" href="/architecture/check-settings">
+    How to configure port range and scan mode at runtime.
+  </Card>
+</CardGroup>

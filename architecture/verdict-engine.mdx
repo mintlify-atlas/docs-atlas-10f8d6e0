@@ -1,0 +1,114 @@
+---
+title: "VerdictEngine: two-phase bypass rules and signal matrix"
+description: "VerdictEngine uses two phases: unconditional bypass rules that trigger DETECTED immediately, then a three-axis signal matrix over GeoIP, direct, and indirect evidence."
+---
+
+`VerdictEngine` takes results from five modules — `GeoIpChecker`, `DirectSignsChecker`, `IndirectSignsChecker`, `LocationSignalsChecker`, and `BypassChecker` — and produces one of three verdicts: `NOT_DETECTED`, `NEEDS_REVIEW`, or `DETECTED`.
+
+```kotlin
+fun evaluate(
+    geoIp: CategoryResult,
+    directSigns: CategoryResult,
+    indirectSigns: CategoryResult,
+    locationSignals: CategoryResult,
+    bypassResult: BypassResult,
+): Verdict
+```
+
+<Note>
+  `IpComparisonChecker` does not participate in `VerdictEngine`. Its result is stored in `CheckResult` and displayed in the UI as a diagnostic block, but it has no effect on the verdict.
+</Note>
+
+Evaluation always runs in two phases. Phase 1 unconditional rules are checked first; if any rule fires, `VerdictEngine` returns `DETECTED` immediately without entering Phase 2.
+
+## Phase 1 — Unconditional rules
+
+These rules apply in order. The first one that matches short-circuits the rest.
+
+<Steps>
+  <Step title="Split tunnel bypass confirmed">
+    Returns `DETECTED` if bypass evidence contains a `SPLIT_TUNNEL_BYPASS` source with `detected = true`.
+
+    This fires when `BypassChecker` proves that traffic is split-tunneled: a direct IP and a proxy IP were both reachable and they differ.
+  </Step>
+  <Step title="Xray gRPC API found">
+    Returns `DETECTED` if bypass evidence contains an `XRAY_API` source with `detected = true`.
+
+    `XrayApiScanner` confirmed a real Xray gRPC endpoint on a localhost port.
+  </Step>
+  <Step title="VPN gateway leak detected">
+    Returns `DETECTED` if bypass evidence contains a `VPN_GATEWAY_LEAK` source with `detected = true`.
+
+    `UnderlyingNetworkProber` reached a public IP endpoint through a non-VPN network while VPN was active — the VPN gateway is leaking the underlying connection.
+  </Step>
+  <Step title="VPN network binding detected">
+    Returns `DETECTED` if bypass evidence contains a `VPN_NETWORK_BINDING` source with `detected = true`.
+
+    A non-VPN internet-capable network was bound and confirmed reachable alongside the active VPN.
+  </Step>
+  <Step title="Location confirms Russia while GeoIP reports foreign">
+    Returns `DETECTED` if location signals confirm the device is physically in Russia **and** GeoIP simultaneously reports a foreign signal.
+
+    Location is confirmed by any of: `network_mcc_ru:true`, `cell_country_ru:true`, or `location_country_ru:true` in `locationSignals.findings`. The foreign GeoIP signal is `geoIp.needsReview == true` or a `GEO_IP` evidence item with `detected = true`.
+
+    This combination is strong evidence that the public IP has been routed through a foreign endpoint while the device is physically inside Russia.
+  </Step>
+</Steps>
+
+## Phase 2 — Signal matrix
+
+If no unconditional rule fired, `VerdictEngine` computes three boolean matrix inputs and looks up the verdict in the table below.
+
+### Matrix inputs
+
+**`geoMatrixHit`** — foreign GeoIP signal is present:
+- `geoIp.needsReview == true`, **or**
+- any `EvidenceItem` in `geoIp.evidence` has `source == GEO_IP` and `detected == true`
+
+**`directMatrixHit`** — confirmed direct-layer evidence is present:
+- any detected `EvidenceItem` in `directSigns.evidence` with source in `DIRECT_NETWORK_CAPABILITIES` or `SYSTEM_PROXY`
+
+**`indirectMatrixHit`** — confirmed indirect-layer evidence is present:
+- any detected `EvidenceItem` in `indirectSigns.evidence` with source in `INDIRECT_NETWORK_CAPABILITIES`, `ACTIVE_VPN`, `NETWORK_INTERFACE`, `ROUTING`, `DNS`, or `PROXY_TECHNICAL_SIGNAL`
+
+### Matrix table
+
+| Geo | Direct | Indirect | Verdict |
+|-----|--------|----------|---------|
+| no  | no     | no       | `NOT_DETECTED` |
+| no  | yes    | no       | `NOT_DETECTED` |
+| no  | no     | yes      | `NOT_DETECTED` |
+| yes | no     | no       | `NEEDS_REVIEW` |
+| no  | yes    | yes      | `NEEDS_REVIEW` |
+| any other combination | — | — | `DETECTED` |
+
+The key insight is that **indirect or direct signals alone are not sufficient** — a foreign GeoIP signal must be present alongside at least one other confirmed signal to reach `DETECTED`. Conversely, an isolated foreign GeoIP signal without corroborating evidence yields only `NEEDS_REVIEW`.
+
+### Signals that do not affect the matrix
+
+`INSTALLED_APP` and `VPN_SERVICE_DECLARATION` evidence items are **not** included in any matrix input. They represent diagnostic findings — a VPN app being installed or declaring a `VpnService` is not confirmation that a tunnel is active. These signals contribute to `matchedApps` and `activeApps` in the result and are shown in the UI, but they play no role in the final verdict calculation.
+
+## Verdict values
+
+| Verdict | Meaning |
+|---------|---------|
+| `NOT_DETECTED` | No significant or corroborated VPN/proxy signals |
+| `NEEDS_REVIEW` | One ambiguous signal (foreign GeoIP alone, or direct+indirect without GeoIP) — manual inspection recommended |
+| `DETECTED` | Strong or corroborated evidence of an active VPN, proxy, or bypass tool |
+
+## Explore further
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    How the six parallel modules feed results into VerdictEngine.
+  </Card>
+  <Card title="Check settings" icon="sliders" href="/architecture/check-settings">
+    Configure which modules run and how they behave.
+  </Card>
+  <Card title="BypassChecker" icon="magnifying-glass" href="/modules/bypass-checker">
+    Details on the split tunnel, Xray API, and underlying network probes that drive Phase 1 rules.
+  </Card>
+  <Card title="Evidence sources" icon="list-check" href="/reference/evidence-sources">
+    Full reference for every EvidenceSource value.
+  </Card>
+</CardGroup>

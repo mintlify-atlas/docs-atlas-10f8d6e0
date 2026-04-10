@@ -1,0 +1,136 @@
+---
+title: "IndirectSignsChecker: interfaces, routing, DNS, and dumpsys"
+description: "Runs eight sub-checks — network capabilities, interfaces, MTU, routing, DNS, proxy-technical signals, and two dumpsys commands — to find indirect evidence of VPN activity."
+---
+
+`IndirectSignsChecker` looks for secondary indicators that a VPN or proxy is routing traffic even when no explicit system flag has been set. All eight sub-checks run on the same thread and share a `networkSnapshots` collection built once from `ConnectivityManager.allNetworks` at the start.
+
+## 1. NOT_VPN capability (`checkNotVpnCapability`)
+
+Android normally adds the `NOT_VPN` capability to any network that is not a VPN tunnel. The checker reads `ConnectivityManager.getNetworkCapabilities(activeNetwork).toString()` and looks for the string `"NOT_VPN"`.
+
+| Result | Outcome |
+|--------|---------|
+| `NOT_VPN` present | Normal — no finding |
+| `NOT_VPN` absent | `detected = true`, evidence source `INDIRECT_NETWORK_CAPABILITIES`, confidence `MEDIUM` |
+
+## 2. Network interfaces (`checkNetworkInterfaces`)
+
+The checker calls `NetworkInterface.getNetworkInterfaces()` and filters for active (`isUp`) interfaces whose names match any of the following patterns:
+
+| Pattern | Example |
+|---------|---------|
+| `tun\d+` | `tun0` |
+| `tap\d+` | `tap0` |
+| `wg\d+` | `wg0` |
+| `ppp\d+` | `ppp0` |
+| `ipsec.*` | `ipsec0`, `ipsecah` |
+
+Any active interface matching these patterns yields `detected = true` with evidence source `NETWORK_INTERFACE` and confidence `MEDIUM`.
+
+## 3. MTU anomaly (`checkMtu`)
+
+Low MTU values on certain interfaces are a reliable indicator of encapsulation overhead introduced by a VPN tunnel.
+
+| Condition | Result |
+|-----------|--------|
+| Active VPN-like interface (pattern above) with MTU 1–1499 | `detected = true`, confidence `MEDIUM` |
+| Active non-standard interface (not `wlan.*`, `rmnet.*`, `eth.*`, `lo`) with MTU 1–1499 | `detected = true`, confidence `LOW` |
+
+## 4. Routing table (`checkRoutingTable`)
+
+Route data is read primarily from `LinkProperties.routes` via the Android API. If no default route is returned by the API, the checker falls back to parsing `/proc/net/route`.
+
+Three routing anomalies can each set `detected = true`:
+
+- **Default route through a non-standard interface** — a default route on an interface other than `wlan.*`, `rmnet.*`, `eth.*`, or `lo` (unless the network itself is already marked as VPN by `TRANSPORT_VPN`).
+- **Dedicated non-default routes through VPN/non-standard interfaces** — specific subnets routed through a tunnel interface rather than the standard uplink.
+- **Split-tunneling pattern** — tunnel routes (non-default) and a standard default route through a normal interface visible simultaneously, indicating that only selected traffic is tunnelled.
+
+All routing evidence uses source `ROUTING` with confidence `MEDIUM`.
+
+## 5. DNS (`checkDns`)
+
+DNS servers are read from `ConnectivityManager.getLinkProperties(activeNetwork).dnsServers`. Each server address is classified and evaluated in context with network snapshots (underlying non-VPN networks, if available).
+
+| Signal | Result |
+|--------|--------|
+| Loopback address (`127.x.x.x`, `::1`) | `detected = true`, confidence `HIGH` |
+| Private address inherited from the same subnet as the main non-VPN network | Normal — informational only |
+| Private address while VPN active and different from underlying network | `detected = true`, confidence `MEDIUM` |
+| Private address without sufficient context | `needsReview = true`, confidence `LOW` |
+| Public DNS replaced while VPN is active | `needsReview = true`, confidence `LOW` |
+| Link-local (`169.254.x.x`, `fe80::/10`) | Informational only |
+
+Evidence source is `DNS`.
+
+## 6. Proxy-technical signals (`checkProxyTechnicalSignals`)
+
+This sub-check combines passive file reads from `/proc/net/` with an installed-package scan.
+
+**Local listeners** are collected from `/proc/net/tcp`, `/proc/net/tcp6`, `/proc/net/udp`, and `/proc/net/udp6`. Listening sockets are matched against a combined list of known proxy ports drawn from `VpnAppCatalog.localhostProxyPorts` plus a static set of common proxy ports.
+
+**Proxy-only utilities** are detected by checking installed packages against catalog entries that carry `LOCAL_PROXY` but not `VPN_SERVICE` — tools like Termux or `tg-ws-proxy` that expose a local proxy without creating an Android VPN tunnel.
+
+| Condition | Result |
+|-----------|--------|
+| Listener on a known localhost proxy port | `detected = true`, confidence `MEDIUM` |
+| Proxy-only utility installed (no VPN service) | `needsReview = true`, confidence `LOW` |
+| Three or more localhost listeners on high ports (≥ 1024) | `needsReview = true`, confidence `LOW` |
+
+<Info>
+  Checks for processes, `iptables`/`pf` rules, and system certificates are incomplete without root or privileged access. A limitation finding is always added to make this gap visible.
+</Info>
+
+## 7. dumpsys vpn_management (`checkDumpsysVpn`)
+
+<Warning>
+  This sub-check runs on **Android 12 (API 31) and later only**. On earlier versions it returns immediately with no findings.
+</Warning>
+
+The checker executes `dumpsys vpn_management` and parses the output using `VpnDumpsysParser`. Empty output, `Permission Denial`, or a missing service all count as no detection.
+
+For each active VPN record found:
+
+- The package name is extracted and looked up in `VpnAppCatalog`.
+- **Known package** — `detected = true`, confidence `HIGH`.
+- **Unknown package** — `detected = true` AND `needsReview = true`, confidence `MEDIUM`.
+
+Evidence source is `ACTIVE_VPN`.
+
+## 8. dumpsys activity services (`checkDumpsysVpnService`)
+
+The checker executes `dumpsys activity services android.net.VpnService` and parses the output for active `VpnService` instances. The matching and confidence logic mirrors sub-check 7.
+
+- **Known package** — `detected = true`, confidence `HIGH`.
+- **Unknown package** — `detected = true` AND `needsReview = true`, confidence `MEDIUM`.
+
+Evidence source is `ACTIVE_VPN`.
+
+## VerdictEngine matrix contribution
+
+`IndirectSignsChecker` populates the **`indirectMatrixHit`** column when any evidence item is present with source `INDIRECT_NETWORK_CAPABILITIES`, `ACTIVE_VPN`, `NETWORK_INTERFACE`, `ROUTING`, `DNS`, or `PROXY_TECHNICAL_SIGNAL`.
+
+| Geo | Direct | Indirect | Verdict |
+|-----|--------|----------|---------|
+| no | no | yes | `NOT_DETECTED` |
+| yes | no | yes | `DETECTED` |
+| no | yes | yes | `NEEDS_REVIEW` |
+| yes | yes | yes | `DETECTED` |
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="DirectSignsChecker" href="/modules/direct-signs">
+    System VPN signals from NetworkCapabilities and proxy properties.
+  </Card>
+  <Card title="BypassChecker" href="/modules/bypass-checker">
+    Active probing of localhost proxies, Xray API, and underlying networks.
+  </Card>
+  <Card title="VpnAppCatalog" href="/reference/vpn-app-catalog">
+    Package signatures and port lists referenced by this checker.
+  </Card>
+  <Card title="VerdictEngine" href="/architecture/verdict-engine">
+    How indirect signals combine with geo and direct evidence.
+  </Card>
+</CardGroup>
